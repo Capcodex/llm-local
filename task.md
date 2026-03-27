@@ -64,28 +64,28 @@
 
 ## Sprint 3 — Forge & Test Engine
 
-- [ ] **T12** Implémenter le nœud **FORGE** — génération de l'outil
+- [x] **T12** Implémenter le nœud **FORGE** — génération de l'outil
   - Prompt LLM pour générer un fichier Python respectant le template standard
   - Sauvegarder dans `tools/tool_{slug}.py`
   - Persister l'entrée `Tool` (statut `candidate`) en BDD
 
-- [ ] **T13** Implémenter le nœud **FORGE** — génération de la skill
+- [x] **T13** Implémenter le nœud **FORGE** — génération de la skill
   - Prompt LLM pour générer le fichier Markdown de skill
   - Sauvegarder dans `brain/skills/skill_{slug}.md`
   - Persister l'entrée `Skill` (statut `candidate`) en BDD
 
-- [ ] **T14** Implémenter le nœud **TESTER** — sandbox d'exécution
+- [x] **T14** Implémenter le nœud **TESTER** — sandbox d'exécution
   - Lancer l'outil candidat dans un subprocess Python isolé
   - Appliquer un timeout configurable (défaut : 10s)
   - Capturer `stdout`, `stderr`, `traceback`
   - Persister le `ToolTestRun` en BDD
 
-- [ ] **T15** Implémenter la boucle de correction FORGE ↔ TESTER
+- [x] **T15** Implémenter la boucle de correction FORGE ↔ TESTER
   - Si TESTER échoue → renvoyer traceback à FORGE pour correction
   - Limite configurable de tentatives (défaut : 3, `MAX_FORGE_ATTEMPTS`)
   - Au-delà → passer la mission en statut `error` avec motif d'arrêt
 
-- [ ] **T16** Vérifier la persistance complète des `ToolTestRun`
+- [x] **T16** Vérifier la persistance complète des `ToolTestRun`
   - Chaque tentative est numérotée (`attempt_number`)
   - Le dernier statut est propagé vers l'outil parent
 

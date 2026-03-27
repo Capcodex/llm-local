@@ -1591,9 +1591,18 @@ def run_mission_endpoint(mission_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(mission)
 
+    # Reload steps so the response includes the full decision trail
+    steps = (
+        db.query(MissionStepModel)
+        .filter(MissionStepModel.mission_id == mission_id)
+        .order_by(MissionStepModel.started_at)
+        .all()
+    )
+
     return {
         "mission": _mission_to_dict(mission),
         "result": graph_result,
+        "steps": [_step_to_dict(s) for s in steps],
     }
 
 
