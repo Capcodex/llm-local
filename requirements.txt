@@ -9,6 +9,11 @@ python-multipart>=0.0.22
 langchain>=0.3.25
 langchain-community>=0.3.24
 langchain-text-splitters>=0.3.8
+# IMPORTANT: keep langchain-core <1.0.0 for compatibility with langchain 0.3.x
+langchain-core>=0.3.58,<1.0.0
+
+# LangGraph (agentique engine — Sprint 2)
+langgraph>=1.0.0,<2.0.0
 
 # LLM local (Ollama)
 # ollama must be running as a separate process — install via https://ollama.com

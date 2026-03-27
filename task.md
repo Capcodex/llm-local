@@ -36,27 +36,27 @@
 
 ## Sprint 2 — Moteur LangGraph (nœuds principaux)
 
-- [ ] **T7** Installer LangGraph et créer le squelette du graphe
+- [x] **T7** Installer LangGraph et créer le squelette du graphe
   - `pip install langgraph`
   - Créer `core/graph/graph.py` avec l'état partagé (`GraphState`)
   - Définir les nœuds et transitions de base
 
-- [ ] **T8** Implémenter le nœud **PLANNER**
+- [x] **T8** Implémenter le nœud **PLANNER**
   - Analyser le prompt de la mission via LLM (Ollama)
   - Rechercher une skill correspondante dans ChromaDB + `brain/skills/`
   - Retourner `decision: use_existing_skill | forge_new_tool` + justification
   - Persister le `MissionStep` PLANNER en BDD
 
-- [ ] **T9** Implémenter le nœud **EXECUTOR**
+- [x] **T9** Implémenter le nœud **EXECUTOR**
   - Charger et exécuter la skill existante identifiée par PLANNER
   - Formater le résultat final pour l'utilisateur
   - Persister le `MissionStep` EXECUTOR en BDD
 
-- [ ] **T10** Implémenter le nœud **LOGGER**
+- [x] **T10** Implémenter le nœud **LOGGER**
   - Centraliser la persistance de chaque transition dans `MissionStep`
   - Écrire les logs dans `logs/` par mission_id
 
-- [ ] **T11** Connecter le graphe à l'API
+- [x] **T11** Connecter le graphe à l'API
   - Endpoint `POST /missions/{id}/run` — déclenche l'exécution du graphe
   - Retourner le résultat final et l'id des steps
 

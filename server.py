@@ -1544,6 +1544,60 @@ def get_mission_steps(mission_id: str, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
+# Mission execution endpoint (T11 — Sprint 2)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/missions/{mission_id}/run")
+def run_mission_endpoint(mission_id: str, db: Session = Depends(get_db)):
+    """Trigger the LangGraph execution engine for a given mission."""
+    from core.graph.graph import run_mission
+
+    mission = db.query(MissionModel).filter(MissionModel.id == mission_id).first()
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission introuvable.")
+
+    if mission.status not in ("pending", "error"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"La mission est déjà en statut '{mission.status}'.",
+        )
+
+    # Mark as running
+    mission.status = "planning"
+    db.commit()
+
+    try:
+        graph_result = run_mission(
+            mission_id=mission_id,
+            prompt=mission.prompt,
+            autonomy_level=mission.autonomy_level,
+            db=db,
+        )
+    except Exception as exc:
+        mission.status = "error"
+        mission.ended_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Erreur d'exécution du graphe : {exc}")
+
+    # Update mission status based on graph result
+    if graph_result.get("error"):
+        mission.status = "error"
+    else:
+        mission.status = "done"
+    mission.ended_at = datetime.now(timezone.utc)
+    if graph_result.get("risk_level"):
+        mission.risk_level = graph_result["risk_level"]
+    db.commit()
+    db.refresh(mission)
+
+    return {
+        "mission": _mission_to_dict(mission),
+        "result": graph_result,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
