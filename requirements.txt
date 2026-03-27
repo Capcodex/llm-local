@@ -1,0 +1,28 @@
+# The Living Kernel — Backend dependencies
+
+# API framework (migration Flask → FastAPI)
+fastapi>=0.128.0
+uvicorn>=0.40.0
+python-multipart>=0.0.22
+
+# LangChain stack
+langchain>=0.3.25
+langchain-community>=0.3.24
+langchain-text-splitters>=0.3.8
+
+# LLM local (Ollama)
+# ollama must be running as a separate process — install via https://ollama.com
+
+# Database
+sqlalchemy>=2.0.34
+alembic>=1.18.4
+
+# Vector store
+chromadb>=1.5.5
+
+# PDF support
+pypdf>=6.9.0
+
+# Testing
+pytest>=8.0.0
+httpx>=0.27.0          # required by FastAPI TestClient

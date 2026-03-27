@@ -1,108 +1,229 @@
-# Plan d'action — RAG local (PDF/TXT/MD) + UI d'import
+# TASK.md — The Living Kernel
 
-## 1) Objectif produit
-Construire un mode RAG dans l'application existante pour que l'assistant puisse:
-- importer des documents (`.pdf`, `.txt`, `.md`),
-- indexer leur contenu,
-- répondre avec contexte documentaire,
-- gérer les documents (ajout, liste, suppression) depuis l'UI.
+> Suivi des tâches d'implémentation. Voir [IMPLEMENTATION_SPEC.md](IMPLEMENTATION_SPEC.md) pour le détail technique de chaque module.
 
-## 2) Résultat attendu (MVP)
-- Upload de fichiers depuis l'UI.
-- Stockage local des fichiers et index vectoriel persistant.
-- Endpoint backend de recherche contextuelle + génération de réponse avec citations.
-- Liste des documents indexés dans l'UI avec suppression.
-- Toggle "Mode RAG" dans le chat (on/off).
+---
 
-## 3) Contraintes et choix techniques (proposés)
-- Embeddings locaux via Ollama embeddings (ou modèle sentence-transformers local en fallback).
-- Vector store local: Chroma persisté sur disque.
-- Parsing:
-  - PDF: `pypdf` (MVP),
-  - TXT/MD: lecture UTF-8.
-- Chunking: `RecursiveCharacterTextSplitter`.
-- Métadonnées minimales: `doc_id`, `filename`, `type`, `chunk_id`, `created_at`.
+## Sprint 1 — Fondations & Migration backend
 
-## 4) Plan par phases
+- [x] **T1** Migrer `server.py` de Flask vers FastAPI
+  - Conserver toutes les routes existantes (`/chat`, `/rag/*`)
+  - Remplacer `flask`, `flask_cors` par `fastapi`, `uvicorn`, `python-multipart`
+  - Adapter la gestion des requêtes et réponses (Pydantic models)
 
-### Phase 0 — Préparation
-- [ ] Créer l'arborescence `data/uploads` et `data/vectorstore`.
-- [ ] Définir une convention d'identifiants documents (`doc_id`).
-- [ ] Ajouter un fichier de config central (`RAG_ENABLED`, chemins, taille chunk, overlap, top_k).
+- [x] **T2** Mettre en place SQLAlchemy + SQLite avec les modèles de données
+  - `Mission`, `MissionStep`, `Tool`, `Skill`, `ToolTestRun`, `RegistryEntry`, `AuditLog`
+  - Fichier `core/models.py`
 
-### Phase 1 — Backend Ingestion
-- [ ] Endpoint `POST /rag/documents` (upload multi-fichiers).
-- [ ] Validation extensions (`.pdf`, `.txt`, `.md`) + taille max fichier.
-- [ ] Extraction texte par type.
-- [ ] Chunking + embeddings + upsert dans le vector store.
-- [ ] Retour API: documents ajoutés + erreurs détaillées par fichier.
+- [x] **T3** Créer les migrations Alembic initiales
+  - Initialiser Alembic (`alembic init`)
+  - Générer la migration pour tous les modèles de T2
 
-### Phase 2 — Backend Gestion documents
-- [ ] Endpoint `GET /rag/documents` (liste documents indexés).
-- [ ] Endpoint `DELETE /rag/documents/:doc_id` (supprimer index + fichier local).
-- [ ] Endpoint `POST /rag/reindex` (optionnel MVP+, pour reconstruction complète).
+- [x] **T4** Implémenter les endpoints CRUD `/missions`
+  - `POST /missions` — créer une mission (prompt, context_path, autonomy_level)
+  - `GET /missions` — liste filtrée par statut
+  - `GET /missions/{id}` — détail mission
+  - `GET /missions/{id}/steps` — traçabilité du chemin décisionnel
 
-### Phase 3 — Backend Question/Réponse RAG
-- [ ] Endpoint `POST /rag/chat` (question + options RAG).
-- [ ] Retrieval `top_k` + score.
-- [ ] Construction d'un prompt de réponse basé sur les chunks récupérés.
-- [ ] Réponse JSON: `reply`, `sources` (nom fichier + extrait + score).
-- [ ] Garde-fou: si aucun contexte pertinent, répondre explicitement sans halluciner.
+- [x] **T5** Créer la structure de fichiers projet
+  - `brain/`, `brain/skills/`, `tools/`, `sandbox/`, `logs/`, `artifacts/`
+  - Fichier `brain/agent.md` (identité initiale de l'agent)
 
-### Phase 4 — Intégration dans `/chat` existant
-- [ ] Ajouter option `use_rag` côté requête chat.
-- [ ] Si `use_rag=true`, router vers pipeline RAG avant réponse finale.
-- [ ] Conserver les outils existants (heure, note) sans régression.
+- [x] **T6** Migrer le pipeline RAG existant dans FastAPI sans régression
+  - Vérifier que tous les tests existants passent après migration
 
-### Phase 5 — UI Gestion des fichiers
-- [ ] Créer un panneau "Documents" avec:
-  - [ ] bouton Upload,
-  - [ ] liste documents,
-  - [ ] suppression document,
-  - [ ] indicateur d'indexation (succès/erreur).
-- [ ] Afficher nombre de documents et dernière mise à jour.
-- [ ] Gérer erreurs UX (format non supporté, fichier vide, extraction impossible).
+---
 
-### Phase 6 — UI Chat RAG
-- [ ] Ajouter toggle "Mode RAG" dans le header/chat.
-- [ ] Envoyer `use_rag` au backend.
-- [ ] Afficher les sources sous la réponse (fichier + extrait court).
-- [ ] Ajouter état de chargement spécifique "Analyse des documents...".
+## Sprint 2 — Moteur LangGraph (nœuds principaux)
 
-### Phase 7 — Qualité / Tests
-- [ ] Tests unitaires extraction texte (`pdf/txt/md`).
-- [ ] Tests unitaires de chunking et métadonnées.
-- [ ] Tests API (upload/list/delete/rag chat).
-- [ ] Test manuel end-to-end UI + backend.
-- [ ] Vérifier persistance après redémarrage serveur.
+- [ ] **T7** Installer LangGraph et créer le squelette du graphe
+  - `pip install langgraph`
+  - Créer `core/graph/graph.py` avec l'état partagé (`GraphState`)
+  - Définir les nœuds et transitions de base
 
-### Phase 8 — Durcissement (après MVP)
-- [ ] Filtrage par document sélectionné dans l'UI.
-- [ ] Réindexation incrémentale plus robuste.
-- [ ] Déduplication hash fichiers.
-- [ ] Support `docx/csv`.
-- [ ] Streaming des réponses RAG.
+- [ ] **T8** Implémenter le nœud **PLANNER**
+  - Analyser le prompt de la mission via LLM (Ollama)
+  - Rechercher une skill correspondante dans ChromaDB + `brain/skills/`
+  - Retourner `decision: use_existing_skill | forge_new_tool` + justification
+  - Persister le `MissionStep` PLANNER en BDD
 
-## 5) Définition de terminé (MVP DoD)
-Le MVP est terminé si:
-- un utilisateur peut importer plusieurs documents (`pdf/txt/md`),
-- ils apparaissent dans la liste UI,
-- il peut en supprimer,
-- en mode RAG, le chat répond en se basant sur ces documents,
-- et chaque réponse affiche ses sources.
+- [ ] **T9** Implémenter le nœud **EXECUTOR**
+  - Charger et exécuter la skill existante identifiée par PLANNER
+  - Formater le résultat final pour l'utilisateur
+  - Persister le `MissionStep` EXECUTOR en BDD
 
-## 6) Risques à surveiller
-- Qualité d'extraction PDF (documents scannés non OCR).
-- Lenteur à l'indexation sur gros fichiers.
-- Hallucinations si prompt RAG mal contraint.
-- Cohérence suppression fichier + suppression vecteurs.
+- [ ] **T10** Implémenter le nœud **LOGGER**
+  - Centraliser la persistance de chaque transition dans `MissionStep`
+  - Écrire les logs dans `logs/` par mission_id
 
-## 7) Ordre d'exécution recommandé (pratique)
-1. Backend ingestion + listing + suppression.
-2. Endpoint `rag/chat` avec citations.
-3. UI Documents (upload/list/delete).
-4. Toggle RAG dans le chat.
-5. Tests + ajustements performance.
+- [ ] **T11** Connecter le graphe à l'API
+  - Endpoint `POST /missions/{id}/run` — déclenche l'exécution du graphe
+  - Retourner le résultat final et l'id des steps
 
-## 8) Première tâche concrète à lancer
-- Implémenter `POST /rag/documents` + extraction texte + indexation Chroma persistée.
+---
+
+## Sprint 3 — Forge & Test Engine
+
+- [ ] **T12** Implémenter le nœud **FORGE** — génération de l'outil
+  - Prompt LLM pour générer un fichier Python respectant le template standard
+  - Sauvegarder dans `tools/tool_{slug}.py`
+  - Persister l'entrée `Tool` (statut `candidate`) en BDD
+
+- [ ] **T13** Implémenter le nœud **FORGE** — génération de la skill
+  - Prompt LLM pour générer le fichier Markdown de skill
+  - Sauvegarder dans `brain/skills/skill_{slug}.md`
+  - Persister l'entrée `Skill` (statut `candidate`) en BDD
+
+- [ ] **T14** Implémenter le nœud **TESTER** — sandbox d'exécution
+  - Lancer l'outil candidat dans un subprocess Python isolé
+  - Appliquer un timeout configurable (défaut : 10s)
+  - Capturer `stdout`, `stderr`, `traceback`
+  - Persister le `ToolTestRun` en BDD
+
+- [ ] **T15** Implémenter la boucle de correction FORGE ↔ TESTER
+  - Si TESTER échoue → renvoyer traceback à FORGE pour correction
+  - Limite configurable de tentatives (défaut : 3, `MAX_FORGE_ATTEMPTS`)
+  - Au-delà → passer la mission en statut `error` avec motif d'arrêt
+
+- [ ] **T16** Vérifier la persistance complète des `ToolTestRun`
+  - Chaque tentative est numérotée (`attempt_number`)
+  - Le dernier statut est propagé vers l'outil parent
+
+---
+
+## Sprint 4 — Registre & Mémoire
+
+- [ ] **T17** Implémenter le nœud **REGISTRY** — enregistrement des outils validés
+  - Créer l'entrée `RegistryEntry` après succès TESTER
+  - Versionner l'outil (`1.0.0`, puis incrémentation automatique)
+  - Mettre le statut `Tool` à `active`
+
+- [ ] **T18** Endpoints `/tools` et `/skills`
+  - `GET /tools` — liste avec filtres statut
+  - `GET /tools/{id}` — détail + historique de tests
+  - `PATCH /tools/{id}` — changer le statut (disable, archive)
+  - `GET /skills` — liste
+  - `GET /skills/{id}` — fiche détail Markdown
+
+- [ ] **T19** Indexer les nouvelles skills dans ChromaDB à la validation
+  - Après enregistrement d'une skill active → upsert dans le vectorstore
+
+- [ ] **T20** Implémenter l'archivage / désactivation d'outils
+  - Un outil `disabled` n'est plus proposé par PLANNER
+  - L'historique reste consultable
+
+- [ ] **T21** Maintenir `brain/agent.md` à jour
+  - Ajouter une ligne de résumé après chaque nouveau skill enregistré
+
+---
+
+## Sprint 5 — Gouvernance & Sécurité
+
+- [ ] **T22** Implémenter le nœud **GOVERNOR**
+  - Vérifier `autonomy_level` de la mission avant chaque action sensible
+  - `restricted` → bloquer jusqu'à validation humaine avant forge
+  - `supervised` → bloquer avant enregistrement au registre
+  - `extended` → laisser passer
+
+- [ ] **T23** Endpoint de validation humaine
+  - `POST /missions/{id}/approve` — approuver un outil candidat
+  - `POST /missions/{id}/reject` — rejeter avec motif
+  - Persister la décision dans `RegistryEntry.validation_status` et `AuditLog`
+
+- [ ] **T24** Implémenter `AuditLog` systématique
+  - Logger toutes les actions critiques : forge, test, enregistrement, approbation, suppression
+  - Champs : `actor_type`, `action`, `target_type`, `target_id`, `metadata`, `created_at`
+
+- [ ] **T25** Sécuriser la sandbox d'exécution
+  - Blacklist de patterns interdits dans le code généré (`os.system`, `subprocess`, `shutil.rmtree`, etc.)
+  - Accès système de fichiers restreint au dossier `sandbox/` uniquement
+  - Pas d'accès réseau (bloquer les imports `requests`, `urllib` dans le code candidat)
+
+- [ ] **T26** Ajouter le rate limiting sur l'API
+  - Installer `slowapi`
+  - Limiter `/missions` à N requêtes/minute par IP
+
+---
+
+## Sprint 6 — Console d'administration (frontend)
+
+- [ ] **T27** Vue `/admin/missions` — historique des missions
+  - Liste filtrée par statut (pending, done, error)
+  - Détail avec steps, outil utilisé, résultat
+
+- [ ] **T28** Vue `/admin/tools` — bibliothèque d'outils
+  - Liste avec statuts
+  - Actions : désactiver, archiver
+  - Détail : code source, historique de tests, skill associée
+
+- [ ] **T29** Vue `/admin/skills` — bibliothèque de compétences
+  - Liste avec titre, résumé, statut
+  - Fiche détail rendu Markdown
+
+- [ ] **T30** Vue `/admin/logs` — journaux techniques
+  - Logs par mission_id
+  - Tracebacks visibles
+  - Filtre par statut
+
+- [ ] **T31** Vue `/admin/registry` — validation des outils candidats
+  - Liste des outils en attente (`validation_status: pending`)
+  - Boutons Approuver / Rejeter
+
+- [ ] **T32** Navigation et routing frontend
+  - Ajouter une navbar avec les sections : Chat | Documents | Missions | Admin
+  - Routing React entre les vues existantes et nouvelles
+
+---
+
+## Sprint 7 — Tests & Observabilité
+
+- [ ] **T33** Tests unitaires des nœuds LangGraph
+  - PLANNER : routing correct selon skill présente / absente
+  - FORGE : code généré respecte le template standard
+  - TESTER : capture correcte stdout/stderr/traceback
+  - EXECUTOR : résultat correctement formaté
+
+- [ ] **T34** Test d'intégration — Flow 1 : skill existante
+  - Mission → PLANNER trouve skill → EXECUTOR → résultat OK
+
+- [ ] **T35** Test d'intégration — Flow 2 : forge + validation
+  - Mission → PLANNER ne trouve rien → FORGE → TESTER succès → REGISTRY → EXECUTOR
+
+- [ ] **T36** Test d'intégration — Flow 3 : boucle de correction
+  - Mission → FORGE génère code invalide → TESTER échoue → FORGE corrige → TESTER succès
+
+- [ ] **T37** Tests de sécurité sandbox
+  - Tentative d'exécution de commande interdite → rejet
+  - Dépassement timeout → arrêt propre
+  - Code tentant d'écrire hors `sandbox/` → rejet
+
+- [ ] **T38** Métriques et observabilité
+  - Endpoint `GET /metrics` : taux de succès missions, nombre moyen de boucles FORGE, temps moyen de forge
+  - Taux de réutilisation skill vs création
+
+---
+
+## Backlog (post-MVP)
+
+- [ ] Sandbox Docker (isolation renforcée)
+- [ ] Support PostgreSQL en production
+- [ ] Streaming des réponses longues (SSE)
+- [ ] Filtrage RAG par document sélectionné dans l'UI
+- [ ] Réindexation incrémentale + déduplication hash
+- [ ] Support `docx`, `csv` dans le pipeline RAG
+- [ ] Notifications webhook (Slack / email) sur validation requise
+- [ ] Export des logs et artefacts
+- [ ] Multi-modèles (sélection du modèle par mission)
+
+---
+
+## Définition de terminé (DoD MVP)
+
+Le MVP est terminé si :
+- Un utilisateur peut soumettre une mission textuelle avec un niveau d'autonomie
+- L'agent cherche une skill existante avant de forger
+- Si aucune skill → un outil Python est généré, testé et enregistré automatiquement
+- En cas d'erreur de test → l'agent tente une correction (max 3 fois)
+- Le résultat final est retourné avec le chemin décisionnel complet
+- Un administrateur peut consulter les missions, outils, skills et logs
+- Les outils sensibles peuvent être soumis à validation humaine avant enregistrement
