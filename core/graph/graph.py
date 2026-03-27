@@ -1,22 +1,25 @@
 """The Living Kernel — LangGraph execution engine.
 
-Graph topology (Sprint 3):
+Graph topology (Sprint 4):
 
   START
     └─► PLANNER
           ├─ use_existing_skill ──► EXECUTOR ──► END
           └─ forge_new_tool ──► FORGE ──► TESTER
-                                             ├─ success ──► EXECUTOR ──► END
-                                             ├─ retry   ──► FORGE  (loop)
+                                             ├─ success ──► REGISTRY ──► EXECUTOR ──► END
+                                             ├─ retry   ──► FORGE  (correction loop)
                                              └─ give_up ──► END_ERROR ──► END
 
 Correction loop (T15):
   - TESTER failure  → back to FORGE with traceback injected in state
   - After MAX_FORGE_ATTEMPTS failures → END_ERROR
+
+REGISTRY (T17):
+  - Creates RegistryEntry, increments version, activates Tool + Skill
+  - Indexes skill in ChromaDB (T19), updates brain/agent.md (T21)
 """
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 from langgraph.graph import END, START, StateGraph
@@ -25,6 +28,7 @@ from core.graph.nodes.executor import executor_node
 from core.graph.nodes.forge import forge_node
 from core.graph.nodes.logger import persist_mission_step, write_log_file
 from core.graph.nodes.planner import planner_node
+from core.graph.nodes.registry import registry_node
 from core.graph.nodes.tester import tester_node
 from core.graph.state import MAX_FORGE_ATTEMPTS, GraphState
 
@@ -184,10 +188,11 @@ def _end_with_error_node(state: GraphState) -> GraphState:
 
 
 def build_graph(db=None) -> StateGraph:
-    """Compile the LangGraph execution graph for Sprint 3."""
+    """Compile the LangGraph execution graph for Sprint 4."""
     planner  = _wrap_node(planner_node,        "PLANNER",   db=db, mission_status="planning")
     forge    = _wrap_node(forge_node,           "FORGE",     db=db, mission_status="forging")
     tester   = _wrap_node(tester_node,          "TESTER",    db=db, mission_status="testing")
+    registry = _wrap_node(registry_node,        "REGISTRY",  db=db)
     executor = _wrap_node(executor_node,        "EXECUTOR",  db=db, mission_status="executing")
     end_err  = _wrap_node(_end_with_error_node, "END_ERROR", db=db)
 
@@ -195,6 +200,7 @@ def build_graph(db=None) -> StateGraph:
     builder.add_node("planner",        planner)
     builder.add_node("forge",          forge)
     builder.add_node("tester",         tester)
+    builder.add_node("registry",       registry)
     builder.add_node("executor",       executor)
     builder.add_node("end_with_error", end_err)
 
@@ -211,9 +217,11 @@ def build_graph(db=None) -> StateGraph:
     builder.add_conditional_edges(
         "tester",
         _route_after_tester,
-        {"executor": "executor", "forge": "forge", "end_with_error": "end_with_error"},
+        # success now goes to registry before executor (T17)
+        {"executor": "registry", "forge": "forge", "end_with_error": "end_with_error"},
     )
 
+    builder.add_edge("registry",       "executor")
     builder.add_edge("executor",       END)
     builder.add_edge("end_with_error", END)
 
@@ -251,6 +259,8 @@ def run_mission(
         "tool_slug": final_state.get("tool_slug"),
         "forge_attempt": final_state.get("forge_attempt"),
         "test_status": final_state.get("test_status"),
+        "registry_entry_id": final_state.get("registry_entry_id"),
+        "registered_version": final_state.get("registered_version"),
         "rationale": final_state.get("rationale"),
         "risk_level": final_state.get("risk_level"),
         "result_text": final_state.get("result_text"),

@@ -43,7 +43,7 @@ Réponds UNIQUEMENT avec un objet JSON valide (pas de commentaire, pas de markdo
 
 
 def _load_skills_from_fs() -> list[dict]:
-    """Return list of {slug, title, summary, path} from brain/skills/*.md."""
+    """Return list of {slug, tool_slug, title, summary, path} from brain/skills/*.md."""
     skills: list[dict] = []
     if not SKILLS_DIR.exists():
         return skills
@@ -53,6 +53,7 @@ def _load_skills_from_fs() -> list[dict]:
         title = slug
         summary = ""
         status = "active"
+        tool_slug = slug  # fallback: same as file stem
         # Parse YAML frontmatter
         fm_match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
         if fm_match:
@@ -63,6 +64,8 @@ def _load_skills_from_fs() -> list[dict]:
                     summary = line.split(":", 1)[1].strip()
                 elif line.startswith("status:"):
                     status = line.split(":", 1)[1].strip()
+                elif line.startswith("tool_slug:"):
+                    tool_slug = line.split(":", 1)[1].strip()
         if status not in ("active",):
             continue
         if not summary:
@@ -73,9 +76,33 @@ def _load_skills_from_fs() -> list[dict]:
                     summary = line[:200]
                     break
         skills.append(
-            {"slug": slug, "title": title, "summary": summary, "path": str(md_file)}
+            {
+                "slug": slug,
+                "tool_slug": tool_slug,
+                "title": title,
+                "summary": summary,
+                "path": str(md_file),
+            }
         )
     return skills
+
+
+def _filter_disabled_tools(skills: list[dict], db) -> list[dict]:
+    """T20 — remove skills whose associated tool is disabled or archived in DB."""
+    if db is None:
+        return skills
+    try:
+        from core.models import Tool
+
+        active = []
+        for s in skills:
+            tool = db.query(Tool).filter(Tool.slug == s["tool_slug"]).first()
+            if tool and tool.status in ("disabled", "archived"):
+                continue
+            active.append(s)
+        return active
+    except Exception:
+        return skills
 
 
 def _search_skills_vector(prompt: str) -> dict | None:
@@ -132,9 +159,11 @@ def planner_node(state: GraphState) -> GraphState:
     """PLANNER node implementation."""
     prompt = state.get("prompt", "")
     mission_id = state.get("mission_id", "")
+    db = state.get("_db")
 
-    # 1. Load skills from filesystem
+    # 1. Load skills from filesystem, then filter disabled tools (T20)
     skills = _load_skills_from_fs()
+    skills = _filter_disabled_tools(skills, db)
 
     # 2. Quick vector search (best-effort)
     vector_hit = _search_skills_vector(prompt)

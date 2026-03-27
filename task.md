@@ -93,26 +93,26 @@
 
 ## Sprint 4 — Registre & Mémoire
 
-- [ ] **T17** Implémenter le nœud **REGISTRY** — enregistrement des outils validés
+- [x] **T17** Implémenter le nœud **REGISTRY** — enregistrement des outils validés
   - Créer l'entrée `RegistryEntry` après succès TESTER
   - Versionner l'outil (`1.0.0`, puis incrémentation automatique)
   - Mettre le statut `Tool` à `active`
 
-- [ ] **T18** Endpoints `/tools` et `/skills`
+- [x] **T18** Endpoints `/tools` et `/skills`
   - `GET /tools` — liste avec filtres statut
   - `GET /tools/{id}` — détail + historique de tests
   - `PATCH /tools/{id}` — changer le statut (disable, archive)
   - `GET /skills` — liste
   - `GET /skills/{id}` — fiche détail Markdown
 
-- [ ] **T19** Indexer les nouvelles skills dans ChromaDB à la validation
+- [x] **T19** Indexer les nouvelles skills dans ChromaDB à la validation
   - Après enregistrement d'une skill active → upsert dans le vectorstore
 
-- [ ] **T20** Implémenter l'archivage / désactivation d'outils
+- [x] **T20** Implémenter l'archivage / désactivation d'outils
   - Un outil `disabled` n'est plus proposé par PLANNER
   - L'historique reste consultable
 
-- [ ] **T21** Maintenir `brain/agent.md` à jour
+- [x] **T21** Maintenir `brain/agent.md` à jour
   - Ajouter une ligne de résumé après chaque nouveau skill enregistré
 
 ---

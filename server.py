@@ -1544,6 +1544,146 @@ def get_mission_steps(mission_id: str, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
+# Tools & Skills endpoints (T18 — Sprint 4)
+# ---------------------------------------------------------------------------
+
+from core.models import Tool as ToolModel
+from core.models import Skill as SkillModel
+from core.models import ToolTestRun as ToolTestRunModel
+from core.models import RegistryEntry as RegistryEntryModel
+
+
+class ToolStatusUpdate(BaseModel):
+    status: Literal["candidate", "active", "disabled", "archived"]
+
+
+def _tool_to_dict(tool: ToolModel) -> dict:
+    return {
+        "id": tool.id,
+        "name": tool.name,
+        "slug": tool.slug,
+        "version": tool.version,
+        "description": tool.description,
+        "file_path": tool.file_path,
+        "status": tool.status,
+        "created_by_mission_id": tool.created_by_mission_id,
+        "created_at": tool.created_at.isoformat() if tool.created_at else None,
+    }
+
+
+def _skill_to_dict(skill: SkillModel, include_markdown: bool = False) -> dict:
+    result = {
+        "id": skill.id,
+        "tool_id": skill.tool_id,
+        "title": skill.title,
+        "slug": skill.slug,
+        "summary": skill.summary,
+        "markdown_path": skill.markdown_path,
+        "status": skill.status,
+        "created_at": skill.created_at.isoformat() if skill.created_at else None,
+    }
+    if include_markdown and skill.markdown_path:
+        try:
+            from pathlib import Path as _Path
+            result["markdown_content"] = _Path(skill.markdown_path).read_text(
+                encoding="utf-8", errors="ignore"
+            )
+        except Exception:
+            result["markdown_content"] = None
+    return result
+
+
+def _test_run_to_dict(run: ToolTestRunModel) -> dict:
+    return {
+        "id": run.id,
+        "tool_id": run.tool_id,
+        "mission_id": run.mission_id,
+        "attempt_number": run.attempt_number,
+        "status": run.status,
+        "stdout": run.stdout,
+        "stderr": run.stderr,
+        "traceback": run.traceback,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    }
+
+
+@app.get("/tools")
+def list_tools(status: Optional[str] = None, db: Session = Depends(get_db)):
+    """List all tools, optionally filtered by status."""
+    query = db.query(ToolModel)
+    if status:
+        query = query.filter(ToolModel.status == status)
+    tools = query.order_by(ToolModel.created_at.desc()).all()
+    return {"tools": [_tool_to_dict(t) for t in tools], "total": len(tools)}
+
+
+@app.get("/tools/{tool_id}")
+def get_tool(tool_id: str, db: Session = Depends(get_db)):
+    """Get tool detail including full test history."""
+    tool = db.query(ToolModel).filter(ToolModel.id == tool_id).first()
+    if not tool:
+        raise HTTPException(status_code=404, detail="Outil introuvable.")
+    result = _tool_to_dict(tool)
+    result["test_runs"] = [_test_run_to_dict(r) for r in tool.test_runs]
+    result["registry_entries"] = [
+        {
+            "id": e.id,
+            "published_version": e.published_version,
+            "validation_status": e.validation_status,
+            "published_at": e.published_at.isoformat() if e.published_at else None,
+        }
+        for e in tool.registry_entries
+    ]
+    return result
+
+
+@app.patch("/tools/{tool_id}")
+def update_tool_status(
+    tool_id: str, body: ToolStatusUpdate, db: Session = Depends(get_db)
+):
+    """Change a tool's lifecycle status (T20 — disable / archive)."""
+    tool = db.query(ToolModel).filter(ToolModel.id == tool_id).first()
+    if not tool:
+        raise HTTPException(status_code=404, detail="Outil introuvable.")
+
+    ALLOWED_TRANSITIONS: dict[str, set] = {
+        "candidate": {"active", "disabled", "archived"},
+        "active":    {"disabled", "archived"},
+        "disabled":  {"active", "archived"},
+        "archived":  set(),
+    }
+    if body.status not in ALLOWED_TRANSITIONS.get(tool.status, set()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Transition '{tool.status}' → '{body.status}' non autorisée.",
+        )
+
+    tool.status = body.status
+    db.commit()
+    db.refresh(tool)
+    return _tool_to_dict(tool)
+
+
+@app.get("/skills")
+def list_skills(status: Optional[str] = None, db: Session = Depends(get_db)):
+    """List all skills, optionally filtered by status."""
+    query = db.query(SkillModel)
+    if status:
+        query = query.filter(SkillModel.status == status)
+    skills = query.order_by(SkillModel.created_at.desc()).all()
+    return {"skills": [_skill_to_dict(s) for s in skills], "total": len(skills)}
+
+
+@app.get("/skills/{skill_id}")
+def get_skill(skill_id: str, db: Session = Depends(get_db)):
+    """Get skill detail including the full Markdown content."""
+    skill = db.query(SkillModel).filter(SkillModel.id == skill_id).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill introuvable.")
+    return _skill_to_dict(skill, include_markdown=True)
+
+
+# ---------------------------------------------------------------------------
 # Mission execution endpoint (T11 — Sprint 2)
 # ---------------------------------------------------------------------------
 
