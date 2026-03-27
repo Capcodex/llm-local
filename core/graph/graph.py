@@ -1,22 +1,32 @@
 """The Living Kernel — LangGraph execution engine.
 
-Graph topology (Sprint 4):
+Graph topology (Sprint 5):
 
   START
     └─► PLANNER
           ├─ use_existing_skill ──► EXECUTOR ──► END
-          └─ forge_new_tool ──► FORGE ──► TESTER
-                                             ├─ success ──► REGISTRY ──► EXECUTOR ──► END
-                                             ├─ retry   ──► FORGE  (correction loop)
-                                             └─ give_up ──► END_ERROR ──► END
+          └─ forge_new_tool ──► GOVERNOR_FORGE
+                                    ├─ blocked ──► AWAITING_APPROVAL ──► END
+                                    └─ pass    ──► FORGE ──► TESTER
+                                                               ├─ retry   ──► FORGE  (correction loop)
+                                                               ├─ give_up ──► END_ERROR ──► END
+                                                               └─ success ──► REGISTRY ──► GOVERNOR_REGISTRY
+                                                                                               ├─ blocked ──► AWAITING_APPROVAL ──► END
+                                                                                               └─ pass    ──► EXECUTOR ──► END
 
 Correction loop (T15):
   - TESTER failure  → back to FORGE with traceback injected in state
   - After MAX_FORGE_ATTEMPTS failures → END_ERROR
 
 REGISTRY (T17):
-  - Creates RegistryEntry, increments version, activates Tool + Skill
+  - Creates RegistryEntry (pending for supervised, approved for extended)
+  - Increments version, activates Tool + Skill for extended
   - Indexes skill in ChromaDB (T19), updates brain/agent.md (T21)
+
+GOVERNOR (T22):
+  - governor_forge:    blocks restricted missions before FORGE
+  - governor_registry: blocks restricted/supervised missions before EXECUTOR
+  - extended autonomy passes both gates
 """
 from __future__ import annotations
 
@@ -26,6 +36,7 @@ from langgraph.graph import END, START, StateGraph
 
 from core.graph.nodes.executor import executor_node
 from core.graph.nodes.forge import forge_node
+from core.graph.nodes.governor import governor_forge_node, governor_registry_node
 from core.graph.nodes.logger import persist_mission_step, write_log_file
 from core.graph.nodes.planner import planner_node
 from core.graph.nodes.registry import registry_node
@@ -77,6 +88,7 @@ def _wrap_node(node_fn, node_name: str, db=None, mission_status: str | None = No
             "skill_id": state.get("skill_id"),
             "tool_slug": state.get("tool_slug"),
             "forge_attempt": state.get("forge_attempt"),
+            "autonomy_level": state.get("autonomy_level"),
         }
 
         # Inject db into state so node functions can use it directly
@@ -95,6 +107,8 @@ def _wrap_node(node_fn, node_name: str, db=None, mission_status: str | None = No
             "rationale": new_state.get("rationale"),
             "risk_level": new_state.get("risk_level"),
             "result_text": new_state.get("result_text"),
+            "blocked": new_state.get("blocked"),
+            "requires_approval_for": new_state.get("requires_approval_for"),
             "error": new_state.get("error"),
         }
         error_snapshot = (
@@ -141,13 +155,20 @@ def _route_after_planner(state: GraphState) -> str:
         return "end_with_error"
     if state.get("decision") == "use_existing_skill":
         return "executor"
-    return "forge"
+    return "governor_forge"   # all forge paths go through GOVERNOR first
+
+
+def _route_after_governor(state: GraphState) -> str:
+    """Shared routing for both GOVERNOR nodes."""
+    if state.get("blocked"):
+        return "awaiting_approval"
+    return "pass"
 
 
 def _route_after_tester(state: GraphState) -> str:
-    """T15 — decide whether to retry FORGE, proceed to EXECUTOR, or give up."""
+    """T15 — decide whether to retry FORGE, proceed to REGISTRY, or give up."""
     if state.get("test_status") == "success":
-        return "executor"
+        return "executor"   # mapped to "registry" in add_conditional_edges
 
     attempt = state.get("forge_attempt", 1)
     max_attempts = state.get("max_forge_attempts", MAX_FORGE_ATTEMPTS)
@@ -159,7 +180,7 @@ def _route_after_tester(state: GraphState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Terminal error node
+# Terminal nodes
 # ---------------------------------------------------------------------------
 
 
@@ -182,34 +203,63 @@ def _end_with_error_node(state: GraphState) -> GraphState:
     return {**state, "error": msg, "result_text": None}
 
 
+def _awaiting_approval_node(state: GraphState) -> GraphState:
+    """Terminal node when GOVERNOR blocks — mission waits for human approval."""
+    phase = state.get("requires_approval_for", "unknown")
+    return {
+        **state,
+        "result_text": (
+            state.get("result_text")
+            or f"Mission bloquée en attente d'approbation humaine (phase : {phase})."
+        ),
+        "error": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Graph factory
 # ---------------------------------------------------------------------------
 
 
 def build_graph(db=None) -> StateGraph:
-    """Compile the LangGraph execution graph for Sprint 4."""
-    planner  = _wrap_node(planner_node,        "PLANNER",   db=db, mission_status="planning")
-    forge    = _wrap_node(forge_node,           "FORGE",     db=db, mission_status="forging")
-    tester   = _wrap_node(tester_node,          "TESTER",    db=db, mission_status="testing")
-    registry = _wrap_node(registry_node,        "REGISTRY",  db=db)
-    executor = _wrap_node(executor_node,        "EXECUTOR",  db=db, mission_status="executing")
-    end_err  = _wrap_node(_end_with_error_node, "END_ERROR", db=db)
+    """Compile the LangGraph execution graph for Sprint 5."""
+    planner      = _wrap_node(planner_node,          "PLANNER",          db=db, mission_status="planning")
+    gov_forge    = _wrap_node(governor_forge_node,   "GOVERNOR_FORGE",   db=db)
+    forge        = _wrap_node(forge_node,            "FORGE",            db=db, mission_status="forging")
+    tester       = _wrap_node(tester_node,           "TESTER",           db=db, mission_status="testing")
+    registry     = _wrap_node(registry_node,         "REGISTRY",         db=db)
+    gov_registry = _wrap_node(governor_registry_node,"GOVERNOR_REGISTRY",db=db)
+    executor     = _wrap_node(executor_node,         "EXECUTOR",         db=db, mission_status="executing")
+    end_err      = _wrap_node(_end_with_error_node,  "END_ERROR",        db=db)
+    awaiting     = _wrap_node(_awaiting_approval_node,"AWAITING_APPROVAL",db=db, mission_status="awaiting_approval")
 
     builder: StateGraph = StateGraph(GraphState)
-    builder.add_node("planner",        planner)
-    builder.add_node("forge",          forge)
-    builder.add_node("tester",         tester)
-    builder.add_node("registry",       registry)
-    builder.add_node("executor",       executor)
-    builder.add_node("end_with_error", end_err)
+    builder.add_node("planner",           planner)
+    builder.add_node("governor_forge",    gov_forge)
+    builder.add_node("forge",             forge)
+    builder.add_node("tester",            tester)
+    builder.add_node("registry",          registry)
+    builder.add_node("governor_registry", gov_registry)
+    builder.add_node("executor",          executor)
+    builder.add_node("end_with_error",    end_err)
+    builder.add_node("awaiting_approval", awaiting)
 
     builder.add_edge(START, "planner")
 
     builder.add_conditional_edges(
         "planner",
         _route_after_planner,
-        {"executor": "executor", "forge": "forge", "end_with_error": "end_with_error"},
+        {
+            "executor":      "executor",
+            "governor_forge":"governor_forge",
+            "end_with_error":"end_with_error",
+        },
+    )
+
+    builder.add_conditional_edges(
+        "governor_forge",
+        _route_after_governor,
+        {"pass": "forge", "awaiting_approval": "awaiting_approval"},
     )
 
     builder.add_edge("forge", "tester")
@@ -217,13 +267,21 @@ def build_graph(db=None) -> StateGraph:
     builder.add_conditional_edges(
         "tester",
         _route_after_tester,
-        # success now goes to registry before executor (T17)
+        # "executor" key → "registry" node (T17)
         {"executor": "registry", "forge": "forge", "end_with_error": "end_with_error"},
     )
 
-    builder.add_edge("registry",       "executor")
-    builder.add_edge("executor",       END)
-    builder.add_edge("end_with_error", END)
+    builder.add_edge("registry", "governor_registry")
+
+    builder.add_conditional_edges(
+        "governor_registry",
+        _route_after_governor,
+        {"pass": "executor", "awaiting_approval": "awaiting_approval"},
+    )
+
+    builder.add_edge("executor",          END)
+    builder.add_edge("end_with_error",    END)
+    builder.add_edge("awaiting_approval", END)
 
     return builder.compile()
 
@@ -264,5 +322,7 @@ def run_mission(
         "rationale": final_state.get("rationale"),
         "risk_level": final_state.get("risk_level"),
         "result_text": final_state.get("result_text"),
+        "blocked": final_state.get("blocked", False),
+        "requires_approval_for": final_state.get("requires_approval_for"),
         "error": final_state.get("error"),
     }

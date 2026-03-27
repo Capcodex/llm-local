@@ -218,7 +218,8 @@ class TestGraphRouting:
     def test_route_after_planner_forge(self):
         from core.graph.graph import _route_after_planner
         state = {"decision": "forge_new_tool"}
-        assert _route_after_planner(state) == "forge"
+        # Sprint 5: forge path now goes through GOVERNOR first
+        assert _route_after_planner(state) == "governor_forge"
 
     def test_route_after_planner_executor(self):
         from core.graph.graph import _route_after_planner

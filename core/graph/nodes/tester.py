@@ -1,8 +1,10 @@
 """TESTER node — runs the candidate tool in a restricted subprocess and captures output.
 
-Implements T14 (sandbox execution) and T16 (ToolTestRun persistence).
+Implements T14 (sandbox execution), T16 (ToolTestRun persistence),
+and T25 (static security scan before execution).
 
-Sandbox constraints (Sprint 3 baseline — reinforced in Sprint 5 T25):
+Sandbox constraints:
+- T25: Static scan rejects code containing forbidden patterns before execution.
 - Runs in a child process with a configurable timeout (default 10 s).
 - stdout / stderr / traceback captured separately.
 - Each attempt is numbered; the ToolTestRun row is always persisted.
@@ -11,6 +13,7 @@ Sandbox constraints (Sprint 3 baseline — reinforced in Sprint 5 T25):
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,7 +23,41 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.graph.nodes.audit import log_audit
 from core.graph.state import MAX_FORGE_ATTEMPTS, GraphState
+
+# ---------------------------------------------------------------------------
+# T25 — Static security scanner
+# ---------------------------------------------------------------------------
+
+# Patterns forbidden in generated tool code
+_FORBIDDEN_PATTERNS: list[str] = [
+    r"\bos\s*\.\s*system\s*\(",
+    r"\bos\s*\.\s*popen\s*\(",
+    r"\bos\s*\.\s*execv\s*\(",
+    r"\bsubprocess\s*\.",
+    r"\bshutil\s*\.\s*rmtree\s*\(",
+    r"\bshutil\s*\.\s*rmdir\s*\(",
+    r"(?<!['\"])\beval\s*\(",
+    r"(?<!['\"])\bexec\s*\(",
+    r"\b__import__\s*\(",
+    r"\bimport\s+requests\b",
+    r"\bfrom\s+requests\b",
+    r"\bimport\s+urllib\b",
+    r"\bfrom\s+urllib\b",
+    r"\bimport\s+httpx\b",
+    r"\bfrom\s+httpx\b",
+    r"\bimport\s+socket\b",
+    r"\bfrom\s+socket\b",
+]
+
+
+def _security_scan(code: str) -> Optional[str]:
+    """Return a violation description if code contains a forbidden pattern, else None."""
+    for pattern in _FORBIDDEN_PATTERNS:
+        if re.search(pattern, code, re.MULTILINE):
+            return f"Motif interdit détecté dans le code généré : {pattern!r}"
+    return None
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "tools"
 SANDBOX_DIR = Path(__file__).resolve().parent.parent.parent.parent / "sandbox"
@@ -87,6 +124,42 @@ def tester_node(state: GraphState) -> GraphState:
             "test_traceback": f"TESTER: fichier introuvable — {tool_path}",
             "test_stdout": "",
             "test_stderr": "",
+        }
+
+    # T25 — Static security scan before execution
+    try:
+        tool_code = tool_path.read_text(encoding="utf-8", errors="ignore")
+        violation = _security_scan(tool_code)
+    except Exception as exc:
+        violation = f"Impossible de lire le fichier outil : {exc}"
+
+    if violation:
+        test_run_id = str(uuid.uuid4())
+        db = state.get("_db")
+        if db is not None and tool_id_db:
+            try:
+                _persist_test_run(
+                    db=db,
+                    run_id=test_run_id,
+                    tool_id=tool_id_db,
+                    mission_id=mission_id,
+                    attempt_number=attempt,
+                    status="failure",
+                    stdout="",
+                    stderr="",
+                    traceback=violation,
+                )
+                _update_tool_status(db=db, tool_id=tool_id_db, test_status="failure")
+            except Exception:
+                pass
+        return {
+            **state,
+            "test_status": "failure",
+            "test_run_id": test_run_id,
+            "test_traceback": violation,
+            "test_stdout": "",
+            "test_stderr": "",
+            "error": None,
         }
 
     SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
@@ -162,6 +235,13 @@ def tester_node(state: GraphState) -> GraphState:
             _update_tool_status(db=db, tool_id=tool_id_db, test_status=test_status)
         except Exception:
             pass
+        log_audit(
+            db=db,
+            action=f"tool_test_{test_status}",
+            target_type="tool",
+            target_id=tool_id_db,
+            metadata={"attempt": attempt, "exit_code": exit_code, "timed_out": timed_out},
+        )
 
     return {
         **state,

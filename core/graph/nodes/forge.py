@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.graph.nodes.audit import log_audit
 from core.graph.state import MAX_FORGE_ATTEMPTS, GraphState
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "tools"
@@ -224,6 +225,13 @@ def forge_node(state: GraphState) -> GraphState:
     # ── Persist Tool in DB ───────────────────────────────────────────────
     db = state.get("_db")  # injected by the graph wrapper when available
     if db is not None:
+        log_audit(
+            db=db,
+            action="tool_forged",
+            target_type="tool",
+            target_id=tool_id_db,
+            metadata={"slug": tool_slug, "attempt": attempt, "mission_id": mission_id},
+        )
         try:
             _upsert_tool(
                 db=db,

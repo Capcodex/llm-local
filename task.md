@@ -119,27 +119,27 @@
 
 ## Sprint 5 — Gouvernance & Sécurité
 
-- [ ] **T22** Implémenter le nœud **GOVERNOR**
+- [x] **T22** Implémenter le nœud **GOVERNOR**
   - Vérifier `autonomy_level` de la mission avant chaque action sensible
   - `restricted` → bloquer jusqu'à validation humaine avant forge
   - `supervised` → bloquer avant enregistrement au registre
   - `extended` → laisser passer
 
-- [ ] **T23** Endpoint de validation humaine
+- [x] **T23** Endpoint de validation humaine
   - `POST /missions/{id}/approve` — approuver un outil candidat
   - `POST /missions/{id}/reject` — rejeter avec motif
   - Persister la décision dans `RegistryEntry.validation_status` et `AuditLog`
 
-- [ ] **T24** Implémenter `AuditLog` systématique
+- [x] **T24** Implémenter `AuditLog` systématique
   - Logger toutes les actions critiques : forge, test, enregistrement, approbation, suppression
   - Champs : `actor_type`, `action`, `target_type`, `target_id`, `metadata`, `created_at`
 
-- [ ] **T25** Sécuriser la sandbox d'exécution
+- [x] **T25** Sécuriser la sandbox d'exécution
   - Blacklist de patterns interdits dans le code généré (`os.system`, `subprocess`, `shutil.rmtree`, etc.)
   - Accès système de fichiers restreint au dossier `sandbox/` uniquement
   - Pas d'accès réseau (bloquer les imports `requests`, `urllib` dans le code candidat)
 
-- [ ] **T26** Ajouter le rate limiting sur l'API
+- [x] **T26** Ajouter le rate limiting sur l'API
   - Installer `slowapi`
   - Limiter `/missions` à N requêtes/minute par IP
 

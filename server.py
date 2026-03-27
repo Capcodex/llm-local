@@ -10,9 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Literal, Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from langchain import hub
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
@@ -151,6 +154,11 @@ _rag_embedding_model = None
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="The Living Kernel", version="1.0.0")
+
+# T26 — Rate limiter (slowapi)
+_limiter = Limiter(key_func=get_remote_address, default_limits=[])
+app.state.limiter = _limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1491,8 +1499,9 @@ def _step_to_dict(step: MissionStepModel) -> dict:
 
 
 @app.post("/missions", status_code=201)
-def create_mission(body: MissionCreate, db: Session = Depends(get_db)):
-    """Create a new mission."""
+@_limiter.limit("20/minute")
+def create_mission(request: Request, body: MissionCreate, db: Session = Depends(get_db)):
+    """Create a new mission (rate-limited: 20/minute per IP)."""
     mission = MissionModel(
         id=str(uuid.uuid4()),
         prompt=body.prompt,
@@ -1723,6 +1732,8 @@ def run_mission_endpoint(mission_id: str, db: Session = Depends(get_db)):
     # Update mission status based on graph result
     if graph_result.get("error"):
         mission.status = "error"
+    elif graph_result.get("blocked"):
+        mission.status = "awaiting_approval"
     else:
         mission.status = "done"
     mission.ended_at = datetime.now(timezone.utc)
@@ -1743,6 +1754,230 @@ def run_mission_endpoint(mission_id: str, db: Session = Depends(get_db)):
         "mission": _mission_to_dict(mission),
         "result": graph_result,
         "steps": [_step_to_dict(s) for s in steps],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Governance endpoints — approve / reject (T23 — Sprint 5)
+# ---------------------------------------------------------------------------
+
+from core.models import AuditLog as AuditLogModel
+
+
+class RejectionRequest(BaseModel):
+    motif: Optional[str] = None
+
+
+def _audit(
+    db,
+    action: str,
+    actor_type: str = "human",
+    target_type: Optional[str] = None,
+    target_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    """Persist an AuditLog row from an API call."""
+    try:
+        entry = AuditLogModel(
+            id=str(uuid.uuid4()),
+            actor_type=actor_type,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            metadata_json=json.dumps(metadata, default=str) if metadata else None,
+        )
+        db.add(entry)
+        db.commit()
+    except Exception:
+        pass
+
+
+@app.post("/missions/{mission_id}/approve")
+def approve_mission(mission_id: str, db: Session = Depends(get_db)):
+    """Approve a mission that is awaiting human validation (T23).
+
+    - If the mission was blocked BEFORE forge (restricted): resets status to
+      'pending' with autonomy_level='extended' so the caller can re-trigger /run.
+    - If the mission was blocked AFTER registry (supervised): approves the
+      pending RegistryEntry and activates the tool, setting status to 'done'.
+    """
+    mission = db.query(MissionModel).filter(MissionModel.id == mission_id).first()
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission introuvable.")
+    if mission.status != "awaiting_approval":
+        raise HTTPException(
+            status_code=409,
+            detail=f"La mission n'est pas en attente d'approbation (statut : '{mission.status}').",
+        )
+
+    # Determine which phase was blocked by looking for a Tool created by this mission
+    tool = (
+        db.query(ToolModel)
+        .filter(ToolModel.created_by_mission_id == mission_id)
+        .first()
+    )
+
+    if tool is None:
+        # Blocked BEFORE forge — reset so the user can re-trigger /run
+        mission.autonomy_level = "extended"
+        mission.status = "pending"
+        mission.ended_at = None
+        db.commit()
+        _audit(
+            db,
+            action="mission_approved_forge",
+            target_type="mission",
+            target_id=mission_id,
+            metadata={"note": "autonomy upgraded to extended; re-run required"},
+        )
+        return {
+            "mission_id": mission_id,
+            "status": "pending",
+            "message": "Mission approuvée — relancez via POST /missions/{id}/run.",
+        }
+
+    # Blocked AFTER registry — approve the pending RegistryEntry
+    pending_entry = (
+        db.query(RegistryEntryModel)
+        .filter(RegistryEntryModel.tool_id == tool.id)
+        .filter(RegistryEntryModel.validation_status == "pending")
+        .order_by(RegistryEntryModel.published_at.desc())
+        .first()
+    )
+
+    if pending_entry:
+        pending_entry.validation_status = "approved"
+        pending_entry.published_at = datetime.now(timezone.utc)
+        pending_entry.approved_by = "human"
+    else:
+        # No pending entry: create and approve one (edge case)
+        pending_entry = RegistryEntryModel(
+            id=str(uuid.uuid4()),
+            tool_id=tool.id,
+            published_version=tool.version or "1.0.0",
+            validation_status="approved",
+            approved_by="human",
+            published_at=datetime.now(timezone.utc),
+        )
+        db.add(pending_entry)
+
+    # Activate the tool
+    tool.status = "active"
+
+    # Activate associated skill if any
+    if pending_entry.skill_id:
+        skill = db.query(SkillModel).filter(SkillModel.id == pending_entry.skill_id).first()
+        if skill:
+            skill.status = "active"
+
+    mission.status = "done"
+    db.commit()
+
+    _audit(
+        db,
+        action="mission_approved_registry",
+        target_type="mission",
+        target_id=mission_id,
+        metadata={"registry_entry_id": pending_entry.id, "tool_id": tool.id},
+    )
+
+    return {
+        "mission_id": mission_id,
+        "status": "done",
+        "registry_entry_id": pending_entry.id,
+        "message": "Outil approuvé et activé.",
+    }
+
+
+@app.post("/missions/{mission_id}/reject")
+def reject_mission(
+    mission_id: str,
+    body: RejectionRequest,
+    db: Session = Depends(get_db),
+):
+    """Reject a mission that is awaiting human validation (T23)."""
+    mission = db.query(MissionModel).filter(MissionModel.id == mission_id).first()
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission introuvable.")
+    if mission.status != "awaiting_approval":
+        raise HTTPException(
+            status_code=409,
+            detail=f"La mission n'est pas en attente d'approbation (statut : '{mission.status}').",
+        )
+
+    # Reject any pending RegistryEntry for tools created by this mission
+    tool = (
+        db.query(ToolModel)
+        .filter(ToolModel.created_by_mission_id == mission_id)
+        .first()
+    )
+    rejected_entry_id: Optional[str] = None
+    if tool:
+        pending_entry = (
+            db.query(RegistryEntryModel)
+            .filter(RegistryEntryModel.tool_id == tool.id)
+            .filter(RegistryEntryModel.validation_status == "pending")
+            .first()
+        )
+        if pending_entry:
+            pending_entry.validation_status = "rejected"
+            rejected_entry_id = pending_entry.id
+
+        # Archive the tool so PLANNER no longer considers it
+        if tool.status in ("candidate", "active"):
+            tool.status = "archived"
+
+    mission.status = "error"
+    db.commit()
+
+    _audit(
+        db,
+        action="mission_rejected",
+        target_type="mission",
+        target_id=mission_id,
+        metadata={"motif": body.motif, "registry_entry_id": rejected_entry_id},
+    )
+
+    return {
+        "mission_id": mission_id,
+        "status": "error",
+        "message": f"Mission rejetée. Motif : {body.motif or '(aucun)'}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# AuditLog endpoint (T24 — Sprint 5)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/audit-logs")
+def list_audit_logs(
+    action: Optional[str] = None,
+    target_type: Optional[str] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """List audit log entries, optionally filtered by action or target_type."""
+    query = db.query(AuditLogModel)
+    if action:
+        query = query.filter(AuditLogModel.action == action)
+    if target_type:
+        query = query.filter(AuditLogModel.target_type == target_type)
+    entries = query.order_by(AuditLogModel.created_at.desc()).limit(limit).all()
+    return {
+        "audit_logs": [
+            {
+                "id": e.id,
+                "actor_type": e.actor_type,
+                "action": e.action,
+                "target_type": e.target_type,
+                "target_id": e.target_id,
+                "metadata": json.loads(e.metadata_json) if e.metadata_json else None,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in entries
+        ],
+        "total": len(entries),
     }
 
 

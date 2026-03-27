@@ -40,6 +40,10 @@ class GraphState(TypedDict, total=False):
     result: Optional[Any]            # raw return value of run()
     result_text: Optional[str]       # human-readable version
 
+    # ── GOVERNOR output (Sprint 5 T22) ────────────────────────────────────
+    blocked: bool                           # True when mission needs human approval
+    requires_approval_for: Optional[str]   # "forge" | "registry"
+
     # ── Error tracking ────────────────────────────────────────────────────
     error: Optional[str]
 

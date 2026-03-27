@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.graph.nodes.audit import log_audit
 from core.graph.state import GraphState
 
 AGENT_MD = Path(__file__).resolve().parent.parent.parent.parent / "brain" / "agent.md"
@@ -224,6 +225,17 @@ def registry_node(state: GraphState) -> GraphState:
                 _activate_skill(db=db, skill_id=forged_skill_id_db)
         except Exception as exc:
             return {**state, "error": f"REGISTRY: erreur DB — {exc}"}
+        log_audit(
+            db=db,
+            action="tool_registered",
+            target_type="tool",
+            target_id=tool_id_db,
+            metadata={
+                "version": version,
+                "autonomy_level": autonomy_level,
+                "registry_entry_id": registry_entry_id,
+            },
+        )
     else:
         # No DB — compute version locally
         version = "1.0.0"
