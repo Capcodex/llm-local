@@ -147,29 +147,29 @@
 
 ## Sprint 6 — Console d'administration (frontend)
 
-- [ ] **T27** Vue `/admin/missions` — historique des missions
+- [x] **T27** Vue `/admin/missions` — historique des missions
   - Liste filtrée par statut (pending, done, error)
   - Détail avec steps, outil utilisé, résultat
 
-- [ ] **T28** Vue `/admin/tools` — bibliothèque d'outils
+- [x] **T28** Vue `/admin/tools` — bibliothèque d'outils
   - Liste avec statuts
   - Actions : désactiver, archiver
   - Détail : code source, historique de tests, skill associée
 
-- [ ] **T29** Vue `/admin/skills` — bibliothèque de compétences
+- [x] **T29** Vue `/admin/skills` — bibliothèque de compétences
   - Liste avec titre, résumé, statut
   - Fiche détail rendu Markdown
 
-- [ ] **T30** Vue `/admin/logs` — journaux techniques
+- [x] **T30** Vue `/admin/logs` — journaux techniques
   - Logs par mission_id
   - Tracebacks visibles
   - Filtre par statut
 
-- [ ] **T31** Vue `/admin/registry` — validation des outils candidats
+- [x] **T31** Vue `/admin/registry` — validation des outils candidats
   - Liste des outils en attente (`validation_status: pending`)
   - Boutons Approuver / Rejeter
 
-- [ ] **T32** Navigation et routing frontend
+- [x] **T32** Navigation et routing frontend
   - Ajouter une navbar avec les sections : Chat | Documents | Missions | Admin
   - Routing React entre les vues existantes et nouvelles
 
